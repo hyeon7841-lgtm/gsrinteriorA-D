@@ -8,15 +8,15 @@ st.set_page_config(layout="wide", page_title="집기입고 현황")
 
 DB = "data.db"
 
-def conn():
+def get_conn():
     return sqlite3.connect(DB, check_same_thread=False)
 
-db = conn()
-c = db.cursor()
+conn = get_conn()
+c = conn.cursor()
 
-# ===============================
+# =========================
 # 테이블
-# ===============================
+# =========================
 c.execute("""
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,11 +36,11 @@ CREATE TABLE IF NOT EXISTS vendor_mapping (
     부문 TEXT, 지역팀 TEXT, 영업팀 TEXT, 업체명 TEXT
 )
 """)
-db.commit()
+conn.commit()
 
-# ===============================
+# =========================
 # 옵션
-# ===============================
+# =========================
 부문목록 = [f"{i}부문" for i in range(1, 7)]
 지역팀목록 = ["1지역", "2지역", "3지역", "4지역", "신선영업1", "신선영업2"]
 영업팀목록 = [f"{i}팀" for i in range(1, 10)]
@@ -51,18 +51,22 @@ db.commit()
     "우단시스템": "dneks1!"
 }
 
-# ===============================
+# =========================
 # 세션
-# ===============================
+# =========================
 if "vendor" not in st.session_state:
     st.session_state.vendor = None
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
-# ===============================
+# =========================
 # 메뉴
-# ===============================
+# =========================
 menu = st.sidebar.radio("메뉴", ["집기입고 문의", "입고문의 처리", "데이터 관리"])
+
+# 업체 페이지 벗어나면 로그아웃
+if menu != "입고문의 처리":
+    st.session_state.vendor = None
 
 # =====================================================
 # 1. 집기입고 문의
@@ -104,17 +108,29 @@ if menu == "집기입고 문의":
                 datetime.now().strftime("%Y-%m-%d %H:%M"),
                 업체
             ))
-            db.commit()
+            conn.commit()
             st.success("등록 완료")
             st.rerun()
 
-    df = pd.read_sql("SELECT * FROM requests ORDER BY id DESC", db)
+    df = pd.read_sql("SELECT * FROM requests ORDER BY id DESC", conn)
+    today = date.today()
+
+    df["처리지연"] = df.apply(
+        lambda x: "⚠️ 지연"
+        if x["예정입고일"] and not x["입고완료"]
+        and date.fromisoformat(x["예정입고일"]) < today
+        else "",
+        axis=1
+    )
 
     st.subheader("🟡 문의접수")
-    st.dataframe(df[(df["예정입고일"].isna()) & (df["입고완료"] == 0)], hide_index=True)
+    st.dataframe(df[df["예정입고일"].isna()], hide_index=True)
 
     st.subheader("🟠 처리현황")
-    st.dataframe(df[(df["예정입고일"].notna()) & (df["입고완료"] == 0)], hide_index=True)
+    st.dataframe(
+        df[(df["예정입고일"].notna()) & (df["입고완료"] == 0)],
+        hide_index=True
+    )
 
     st.subheader("🟢 입고완료")
     st.dataframe(df[df["입고완료"] == 1], hide_index=True)
@@ -136,13 +152,17 @@ if menu == "입고문의 처리":
             st.error("로그인 실패")
     else:
         st.info(f"로그인 업체 : {st.session_state.vendor}")
+
         df = pd.read_sql(
             "SELECT * FROM requests WHERE 업체명=? ORDER BY id DESC",
-            db,
+            conn,
             params=(st.session_state.vendor,)
         )
 
-        st.dataframe(df, hide_index=True)
+        def highlight(row):
+            return ["background-color: #ffe5e5"] * len(row) if row["입고완료"] == 0 else [""] * len(row)
+
+        st.dataframe(df.style.apply(highlight, axis=1), hide_index=True)
 
         미처리 = df[df["입고완료"] == 0]
         if not 미처리.empty:
@@ -157,7 +177,7 @@ if menu == "입고문의 처리":
                 SET 예정입고일=?, 입고완료=?, 입고완료일=?
                 WHERE id=?
                 """, (예정.strftime("%Y-%m-%d"), int(완료), 완료일, 선택))
-                db.commit()
+                conn.commit()
                 st.success("처리 완료")
                 st.rerun()
 
@@ -176,17 +196,18 @@ if menu == "데이터 관리":
             else:
                 st.error("비밀번호 오류")
     else:
-        df = pd.read_sql("SELECT * FROM requests", db)
+        df = pd.read_sql("SELECT * FROM requests", conn)
 
-        # ===== 그래프 =====
+        # ===== 통합 그래프 =====
         total = len(df)
         done = df["입고완료"].sum()
         ing = total - done
+        rate = (done / total * 100) if total else 0
 
         chart_df = pd.DataFrame({
             "구분": ["전체", "처리중", "완료"],
             "건수": [total, ing, done],
-            "처리율": [done / total * 100 if total else 0] * 3
+            "처리율": [rate, rate, rate]
         })
 
         bar = alt.Chart(chart_df).mark_bar().encode(
@@ -200,6 +221,21 @@ if menu == "데이터 관리":
         )
 
         st.altair_chart(bar + line, use_container_width=True)
+
+        # ===== 완료 초기화 =====
+        st.subheader("⚠️ 입고완료 초기화")
+        reset_pw = st.text_input("초기화 비밀번호", type="password")
+        if st.button("입고완료 전체 초기화"):
+            if reset_pw == "이현호":
+                c.execute("""
+                UPDATE requests
+                SET 입고완료=0, 입고완료일=NULL, 예정입고일=NULL
+                """)
+                conn.commit()
+                st.success("초기화 완료")
+                st.rerun()
+            else:
+                st.error("초기화 비밀번호 오류")
 
         # ===== 업체 매칭 =====
         st.subheader("🏭 업체 매칭 관리")
@@ -219,8 +255,8 @@ if menu == "데이터 관리":
                 c.execute("DELETE FROM vendor_mapping WHERE 부문=? AND 지역팀=? AND 영업팀=?", (b, r, y))
                 c.execute("INSERT INTO vendor_mapping VALUES (?, ?, ?, ?)", (b, r, y, v))
                 c.execute("UPDATE requests SET 업체명=? WHERE 부문=? AND 지역팀=? AND 영업팀=?", (v, b, r, y))
-                db.commit()
+                conn.commit()
                 st.success("저장 완료")
                 st.rerun()
 
-        st.dataframe(pd.read_sql("SELECT * FROM vendor_mapping", db), hide_index=True)
+        st.dataframe(pd.read_sql("SELECT * FROM vendor_mapping", conn), hide_index=True)

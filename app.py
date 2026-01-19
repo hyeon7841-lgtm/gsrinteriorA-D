@@ -14,9 +14,9 @@ def get_conn():
 conn = get_conn()
 c = conn.cursor()
 
-# =========================
-# DB 테이블
-# =========================
+# ==================================================
+# 테이블 생성
+# ==================================================
 c.execute("""
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,9 +62,25 @@ CREATE TABLE IF NOT EXISTS vendor_mapping (
 
 conn.commit()
 
-# =========================
-# 공통 옵션
-# =========================
+# ==================================================
+# 🔧 컬럼 마이그레이션 (구버전 DB 대응)
+# ==================================================
+def add_column_if_not_exists(table, column, col_type):
+    cols = [row[1] for row in c.execute(f"PRAGMA table_info({table})")]
+    if column not in cols:
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        conn.commit()
+
+for col, typ in [
+    ("업체명", "TEXT"),
+    ("상태", "TEXT"),
+    ("예정입고일", "TEXT")
+]:
+    add_column_if_not_exists("requests", col, typ)
+
+# ==================================================
+# 옵션
+# ==================================================
 부문목록 = [f"{i}부문" for i in range(1, 7)]
 지역팀목록 = ["1지역", "2지역", "3지역", "4지역", "신선영업1", "신선영업2"]
 영업팀목록 = [f"{i}팀" for i in range(1, 10)]
@@ -75,9 +91,9 @@ conn.commit()
     "우단시스템": "우단시스템1!"
 }
 
-# =========================
+# ==================================================
 # 세션
-# =========================
+# ==================================================
 if "vendor" not in st.session_state:
     st.session_state.vendor = None
 if "admin" not in st.session_state:
@@ -93,9 +109,9 @@ if menu != "입고문의 처리":
 if menu != "데이터 관리":
     st.session_state.admin = False
 
-# =================================================
-# 1️⃣ 집기입고 문의 (등록 + 전체목록 유지)
-# =================================================
+# ==================================================
+# 1️⃣ 집기입고 문의
+# ==================================================
 if menu == "집기입고 문의":
     st.header("📦 집기입고 문의")
 
@@ -140,9 +156,9 @@ if menu == "집기입고 문의":
     df_all = pd.read_sql("SELECT * FROM requests ORDER BY id DESC", conn)
     st.dataframe(df_all, hide_index=True, use_container_width=True)
 
-# =================================================
-# 2️⃣ 입고문의 처리 (접수 / 처리중 / 완료 분리)
-# =================================================
+# ==================================================
+# 2️⃣ 입고문의 처리
+# ==================================================
 if menu == "입고문의 처리":
     st.header("🏭 입고문의 처리")
 
@@ -156,7 +172,7 @@ if menu == "입고문의 처리":
             else:
                 st.error("로그인 실패")
     else:
-        st.info(f"로그인 업체 : {st.session_state.vendor}")
+        st.success(f"로그인 업체 : {st.session_state.vendor}")
 
         df = pd.read_sql(
             "SELECT * FROM requests WHERE 업체명=? ORDER BY id DESC",
@@ -164,37 +180,37 @@ if menu == "입고문의 처리":
         )
 
         col1, col2, col3 = st.columns(3)
-
         with col1:
             st.subheader("🟥 접수")
             st.dataframe(df[df["상태"] == "접수"], hide_index=True)
-
         with col2:
             st.subheader("🟨 처리중")
             st.dataframe(df[df["상태"] == "처리중"], hide_index=True)
-
         with col3:
             st.subheader("🟩 완료")
             st.dataframe(df[df["상태"] == "완료"], hide_index=True)
 
         st.subheader("✏️ 문의 처리")
-        선택ID = st.selectbox("처리할 문의 ID", df["id"])
-        예정일 = st.date_input("입고예정일", date.today())
-        완료 = st.checkbox("입고완료")
+        if not df.empty:
+            선택ID = st.selectbox("처리할 문의 ID", df["id"])
+            예정일 = st.date_input("입고예정일", date.today())
+            완료 = st.checkbox("입고완료")
 
-        if st.button("처리 저장"):
-            상태 = "완료" if 완료 else "처리중"
-            c.execute(
-                "UPDATE requests SET 예정입고일=?, 상태=? WHERE id=?",
-                (예정일.strftime("%Y-%m-%d"), 상태, 선택ID)
-            )
-            conn.commit()
-            st.success("처리되었습니다.")
-            st.rerun()
+            if st.button("처리 저장"):
+                상태 = "완료" if 완료 else "처리중"
+                c.execute(
+                    "UPDATE requests SET 예정입고일=?, 상태=? WHERE id=?",
+                    (예정일.strftime("%Y-%m-%d"), 상태, 선택ID)
+                )
+                conn.commit()
+                st.success("처리되었습니다.")
+                st.rerun()
+        else:
+            st.info("처리할 문의가 없습니다.")
 
-# =================================================
-# 3️⃣ 데이터 관리 (현황표 + 그래프 유지)
-# =================================================
+# ==================================================
+# 3️⃣ 데이터 관리
+# ==================================================
 if menu == "데이터 관리":
     st.header("📊 데이터 관리")
 
@@ -212,34 +228,32 @@ if menu == "데이터 관리":
         st.subheader("📋 현재 문의 현황표")
         st.dataframe(df, hide_index=True, use_container_width=True)
 
-        # =========================
-        # 그래프 (업체별 처리현황)
-        # =========================
-        g = df.groupby("업체명").agg(
-            전체=("id", "count"),
-            완료=("상태", lambda x: (x == "완료").sum())
-        ).reset_index()
-        g["처리율"] = g["완료"] / g["전체"] * 100
-
-        bar = alt.Chart(g).mark_bar().encode(
-            x="업체명", y="전체"
-        )
-        line = alt.Chart(g).mark_line(color="red").encode(
-            x="업체명",
-            y=alt.Y("처리율", axis=alt.Axis(title="처리율(%)"))
-        )
-
         st.subheader("📈 업체별 처리현황")
-        st.altair_chart(
-            alt.layer(bar, line).resolve_scale(y="independent"),
-            use_container_width=True
-        )
+        if not df.empty and "업체명" in df.columns and "상태" in df.columns:
+            g = df.groupby("업체명").agg(
+                전체=("id", "count"),
+                완료=("상태", lambda x: (x == "완료").sum())
+            ).reset_index()
+            g["처리율"] = (g["완료"] / g["전체"] * 100).round(1)
 
-        # =========================
-        # 완료보관함 이동
-        # =========================
-        st.subheader("📦 완료건 보관")
-        if st.button("입고완료 → 완료보관함"):
+            bar = alt.Chart(g).mark_bar().encode(
+                x="업체명",
+                y=alt.Y("전체", title="건수")
+            )
+            line = alt.Chart(g).mark_line(color="red").encode(
+                x="업체명",
+                y=alt.Y("처리율", axis=alt.Axis(title="처리율(%)"))
+            )
+
+            st.altair_chart(
+                alt.layer(bar, line).resolve_scale(y="independent"),
+                use_container_width=True
+            )
+        else:
+            st.info("그래프를 표시할 데이터가 없습니다.")
+
+        st.subheader("📦 완료건 → 완료보관함 이동")
+        if st.button("입고완료 보관"):
             c.execute("""
             INSERT INTO completed_archive
             SELECT * FROM requests WHERE 상태='완료'
@@ -249,13 +263,11 @@ if menu == "데이터 관리":
             st.success("완료보관함으로 이동 완료")
             st.rerun()
 
-        # =========================
-        # 잘못 접수 삭제
-        # =========================
         st.subheader("❌ 잘못 접수된 문의 삭제")
-        del_id = st.selectbox("삭제할 문의 ID", df["id"])
-        if st.button("문의 삭제"):
-            c.execute("DELETE FROM requests WHERE id=?", (del_id,))
-            conn.commit()
-            st.success("삭제 완료")
-            st.rerun()
+        if not df.empty:
+            del_id = st.selectbox("삭제할 문의 ID", df["id"])
+            if st.button("문의 삭제"):
+                c.execute("DELETE FROM requests WHERE id=?", (del_id,))
+                conn.commit()
+                st.success("삭제 완료")
+                st.rerun()

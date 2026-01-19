@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime, date
+import io
 
 # =====================================================
 # 기본 설정
@@ -69,6 +70,8 @@ if "vendor" not in st.session_state:
     st.session_state.vendor = None
 if "admin_auth" not in st.session_state:
     st.session_state.admin_auth = False
+if "last_menu" not in st.session_state:
+    st.session_state.last_menu = None
 
 # =====================================================
 # 사이드바
@@ -77,6 +80,11 @@ menu = st.sidebar.radio(
     "메뉴",
     ["집기입고 문의", "입고문의 처리", "데이터 관리"]
 )
+
+# 🔐 데이터관리에서 다른 메뉴로 이동 시 인증 해제
+if st.session_state.last_menu == "데이터 관리" and menu != "데이터 관리":
+    st.session_state.admin_auth = False
+st.session_state.last_menu = menu
 
 # =====================================================
 # 1️⃣ 집기입고 문의
@@ -94,17 +102,17 @@ if menu == "집기입고 문의":
             담당자명 = st.text_input("담당자명")
 
         with col2:
-            연락처 = st.text_input("연락처 (숫자만)")
-            점포명 = st.text_input("점포명 (점 제외)")
+            연락처 = st.text_input("연락처")
+            점포명 = st.text_input("점포명")
             요청집기목록 = st.text_area("요청집기목록")
 
         if st.form_submit_button("문의 등록"):
-            if "-" in 연락처:
-                st.warning("연락처는 숫자만 입력해주세요 (- 제외)")
-                st.stop()
+            # 🔧 연락처 자동 정제
+            연락처 = 연락처.replace("-", "").strip()
+
+            # 🔧 점포명 끝의 '점' 자동 제거
             if 점포명.endswith("점"):
-                st.warning("점포명에 '점'은 입력하지 말아주세요")
-                st.stop()
+                점포명 = 점포명[:-1]
 
             vendor = c.execute(
                 "SELECT 업체명 FROM vendor_mapping WHERE 부문=? AND 지역팀=? AND 영업팀=?",
@@ -132,8 +140,7 @@ if menu == "집기입고 문의":
     st.subheader("📋 집기입고 문의 현황")
 
     search = st.text_input("점포명 검색")
-    query = "SELECT * FROM requests"
-    df = pd.read_sql(query, conn)
+    df = pd.read_sql("SELECT * FROM requests", conn)
 
     if search:
         df = df[df["점포명"].str.contains(search, na=False)]
@@ -208,13 +215,14 @@ if menu == "데이터 관리":
     else:
         df = pd.read_sql("SELECT * FROM requests", conn)
 
-        st.subheader("업체별 처리율")
-        summary = df.groupby("업체명").agg(
-            전체=("id", "count"),
-            완료=("입고완료", "sum")
+        st.subheader("📥 원시 데이터 다운로드 (CSV)")
+        csv = df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "CSV 다운로드",
+            data=csv,
+            file_name="집기입고_원시데이터.csv",
+            mime="text/csv"
         )
-        summary["완료율(%)"] = (summary["완료"] / summary["전체"] * 100).round(1)
-        st.dataframe(summary)
 
         st.subheader("업체 매칭 관리")
         map_df = pd.read_sql("SELECT * FROM vendor_mapping", conn)

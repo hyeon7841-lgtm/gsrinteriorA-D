@@ -2,7 +2,6 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime, date
-import matplotlib.pyplot as plt
 
 # =========================================================
 # 기본 설정
@@ -48,17 +47,6 @@ CREATE TABLE IF NOT EXISTS vendor_mapping (
 conn.commit()
 
 # =========================================================
-# 컬럼 마이그레이션
-# =========================================================
-def add_column_if_not_exists(table, column, col_type):
-    cols = [row[1] for row in c.execute(f"PRAGMA table_info({table})")]
-    if column not in cols:
-        c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-        conn.commit()
-
-add_column_if_not_exists("requests", "입고완료일", "TEXT")
-
-# =========================================================
 # 옵션
 # =========================================================
 부문_리스트 = [f"{i}부문" for i in range(1, 7)]
@@ -77,8 +65,6 @@ VENDOR_USERS = {
 # =========================================================
 # 세션
 # =========================================================
-if "auth" not in st.session_state:
-    st.session_state.auth = False
 if "vendor" not in st.session_state:
     st.session_state.vendor = None
 
@@ -174,11 +160,7 @@ if menu == "입고문의 처리":
         st.dataframe(df, use_container_width=True)
 
         if len(df) > 0:
-            선택 = st.selectbox(
-                "처리할 문의 선택",
-                df["id"].tolist()
-            )
-
+            선택 = st.selectbox("처리할 문의 선택 (ID)", df["id"].tolist())
             예정입고일 = st.date_input("예정입고일", date.today())
             완료 = st.checkbox("입고완료")
 
@@ -200,11 +182,10 @@ if menu == "입고문의 처리":
                 st.rerun()
 
 # =========================================================
-# 3️⃣ 데이터 관리 (관리자)
+# 3️⃣ 데이터 관리
 # =========================================================
 if menu == "데이터 관리":
     st.header("📊 데이터 관리")
-
     pw = st.text_input("비밀번호", type="password")
 
     if pw in ["시설", "tltjf"]:
@@ -218,36 +199,23 @@ if menu == "데이터 관리":
         summary["완료율(%)"] = (summary["완료건수"] / summary["전체건수"] * 100).round(1)
         st.dataframe(summary)
 
-        def draw_bar(group_col):
-            g = df.groupby(group_col)["입고완료"].mean() * 100
-            fig, ax = plt.subplots()
-            ax.bar(g.index, g.values)
-            ax.set_ylabel("입고완료율 (%)")
-            ax.set_ylim(0, 100)
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
+        st.subheader("📊 시각화")
+        view = st.radio("구분 선택", ["업체명", "부문", "지역팀"])
 
-        col1, col2, col3 = st.columns(3)
+        chart_df = (
+            df.groupby(view)["입고완료"]
+            .mean()
+            .reset_index(name="입고완료율(%)")
+        )
+        chart_df["입고완료율(%)"] *= 100
 
-        with col1:
-            if st.button("업체별 그래프"):
-                draw_bar("업체명")
-        with col2:
-            if st.button("부문별 그래프"):
-                draw_bar("부문")
-        with col3:
-            if st.button("지역별 그래프"):
-                draw_bar("지역팀")
+        st.bar_chart(chart_df.set_index(view))
 
         st.divider()
         st.subheader("🏭 업체 매칭 관리")
 
         mapping_df = pd.read_sql("SELECT * FROM vendor_mapping", conn)
-        edited = st.data_editor(
-            mapping_df,
-            num_rows="dynamic",
-            use_container_width=True
-        )
+        edited = st.data_editor(mapping_df, num_rows="dynamic", use_container_width=True)
 
         if st.button("업체 매칭 저장"):
             c.execute("DELETE FROM vendor_mapping")

@@ -46,9 +46,9 @@ conn.commit()
 영업팀목록 = [f"{i}팀" for i in range(1, 10)]
 
 업체계정 = {
-    "한영냉동": "gksdud1!",
-    "태민냉동": "xoals1!",
-    "우단시스템": "dneks1!"
+    "한영냉동": "한영1!",
+    "태민냉동": "태민1!",
+    "우단시스템": "우단시스템1!"
 }
 
 # =========================
@@ -64,7 +64,7 @@ if "admin" not in st.session_state:
 # =========================
 menu = st.sidebar.radio("메뉴", ["집기입고 문의", "입고문의 처리", "데이터 관리"])
 
-# 업체 페이지 벗어나면 로그아웃
+# 입고문의 처리 페이지 벗어나면 업체 로그아웃
 if menu != "입고문의 처리":
     st.session_state.vendor = None
 
@@ -136,7 +136,7 @@ if menu == "집기입고 문의":
     st.dataframe(df[df["입고완료"] == 1], hide_index=True)
 
 # =====================================================
-# 2. 입고문의 처리
+# 2. 입고문의 처리 (업체)
 # =====================================================
 if menu == "입고문의 처리":
     st.header("🏭 입고문의 처리")
@@ -222,30 +222,18 @@ if menu == "데이터 관리":
 
         st.altair_chart(bar + line, use_container_width=True)
 
-        # ===== 완료 초기화 =====
-        st.subheader("⚠️ 입고완료 초기화")
-        reset_pw = st.text_input("초기화 비밀번호", type="password")
-        if st.button("입고완료 전체 초기화"):
-            if reset_pw == "이현호":
-                # ===== 입고완료 데이터 완전 삭제 =====
-st.subheader("⚠️ 입고완료 데이터 삭제")
+        # ===== 입고완료 데이터 완전 삭제 =====
+        st.subheader("⚠️ 입고완료 데이터 삭제 (되돌릴 수 없음)")
+        del_pw = st.text_input("삭제 비밀번호", type="password")
 
-reset_pw = st.text_input("삭제 비밀번호", type="password")
-
-if st.button("입고완료 건 전체 삭제"):
-    if reset_pw == "이현호":
-        c.execute("DELETE FROM requests WHERE 입고완료 = 1")
-        conn.commit()
-        st.success("입고완료 데이터가 모두 삭제되었습니다.")
-        st.rerun()
-    else:
-        st.error("비밀번호가 올바르지 않습니다.")
-
+        if st.button("입고완료 건 전체 삭제"):
+            if del_pw == "이현호":
+                c.execute("DELETE FROM requests WHERE 입고완료 = 1")
                 conn.commit()
-                st.success("초기화 완료")
+                st.success("입고완료 데이터가 모두 삭제되었습니다.")
                 st.rerun()
             else:
-                st.error("초기화 비밀번호 오류")
+                st.error("비밀번호가 올바르지 않습니다.")
 
         # ===== 업체 매칭 =====
         st.subheader("🏭 업체 매칭 관리")
@@ -262,11 +250,20 @@ if st.button("입고완료 건 전체 삭제"):
                 v = st.text_input("업체명")
 
             if st.form_submit_button("저장"):
-                c.execute("DELETE FROM vendor_mapping WHERE 부문=? AND 지역팀=? AND 영업팀=?", (b, r, y))
-                c.execute("INSERT INTO vendor_mapping VALUES (?, ?, ?, ?)", (b, r, y, v))
-                c.execute("UPDATE requests SET 업체명=? WHERE 부문=? AND 지역팀=? AND 영업팀=?", (v, b, r, y))
+                c.execute(
+                    "DELETE FROM vendor_mapping WHERE 부문=? AND 지역팀=? AND 영업팀=?",
+                    (b, r, y)
+                )
+                c.execute(
+                    "INSERT INTO vendor_mapping VALUES (?, ?, ?, ?)",
+                    (b, r, y, v)
+                )
+                c.execute(
+                    "UPDATE requests SET 업체명=? WHERE 부문=? AND 지역팀=? AND 영업팀=?",
+                    (v, b, r, y)
+                )
                 conn.commit()
-                st.success("저장 완료")
+                st.success("업체 매칭 저장 완료")
                 st.rerun()
 
         st.dataframe(pd.read_sql("SELECT * FROM vendor_mapping", conn), hide_index=True)

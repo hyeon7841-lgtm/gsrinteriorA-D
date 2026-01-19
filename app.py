@@ -2,7 +2,6 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime, date
-import io
 
 # =====================================================
 # 기본 설정
@@ -17,7 +16,7 @@ conn = get_conn()
 c = conn.cursor()
 
 # =====================================================
-# 테이블
+# 테이블 생성 (requests는 유지)
 # =====================================================
 c.execute("""
 CREATE TABLE IF NOT EXISTS requests (
@@ -37,15 +36,31 @@ CREATE TABLE IF NOT EXISTS requests (
 )
 """)
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS vendor_mapping (
-    부문 TEXT,
-    지역팀 TEXT,
-    영업팀 TEXT,
-    업체명 TEXT
-)
-""")
-conn.commit()
+# =====================================================
+# vendor_mapping 구조 검사 & 재생성 (핵심 수정)
+# =====================================================
+def ensure_vendor_mapping():
+    cols = []
+    try:
+        cols = [row[1] for row in c.execute("PRAGMA table_info(vendor_mapping)")]
+    except:
+        pass
+
+    required = ["부문", "지역팀", "영업팀", "업체명"]
+
+    if set(cols) != set(required):
+        c.execute("DROP TABLE IF EXISTS vendor_mapping")
+        c.execute("""
+        CREATE TABLE vendor_mapping (
+            부문 TEXT,
+            지역팀 TEXT,
+            영업팀 TEXT,
+            업체명 TEXT
+        )
+        """)
+        conn.commit()
+
+ensure_vendor_mapping()
 
 # =====================================================
 # 옵션
@@ -81,7 +96,7 @@ menu = st.sidebar.radio(
     ["집기입고 문의", "입고문의 처리", "데이터 관리"]
 )
 
-# 🔐 데이터관리에서 다른 메뉴로 이동 시 인증 해제
+# 데이터관리 → 다른 메뉴 이동 시 인증 해제
 if st.session_state.last_menu == "데이터 관리" and menu != "데이터 관리":
     st.session_state.admin_auth = False
 st.session_state.last_menu = menu
@@ -107,10 +122,7 @@ if menu == "집기입고 문의":
             요청집기목록 = st.text_area("요청집기목록")
 
         if st.form_submit_button("문의 등록"):
-            # 🔧 연락처 자동 정제
             연락처 = 연락처.replace("-", "").strip()
-
-            # 🔧 점포명 끝의 '점' 자동 제거
             if 점포명.endswith("점"):
                 점포명 = 점포명[:-1]
 
@@ -138,12 +150,7 @@ if menu == "집기입고 문의":
 
     st.divider()
     st.subheader("📋 집기입고 문의 현황")
-
-    search = st.text_input("점포명 검색")
     df = pd.read_sql("SELECT * FROM requests", conn)
-
-    if search:
-        df = df[df["점포명"].str.contains(search, na=False)]
 
     col1, col2 = st.columns(2)
     with col1:
@@ -178,7 +185,6 @@ if menu == "입고문의 처리":
             params=(st.session_state.vendor,)
         )
 
-        st.subheader("📋 등록된 문의 목록")
         st.dataframe(df, use_container_width=True)
 
         미처리 = df[df["입고완료"] == 0]
@@ -215,16 +221,14 @@ if menu == "데이터 관리":
     else:
         df = pd.read_sql("SELECT * FROM requests", conn)
 
-        st.subheader("📥 원시 데이터 다운로드 (CSV)")
         csv = df.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             "CSV 다운로드",
-            data=csv,
-            file_name="집기입고_원시데이터.csv",
-            mime="text/csv"
+            csv,
+            "집기입고_원시데이터.csv",
+            "text/csv"
         )
 
-        st.subheader("업체 매칭 관리")
         map_df = pd.read_sql("SELECT * FROM vendor_mapping", conn)
         edited = st.data_editor(map_df, num_rows="dynamic", use_container_width=True)
 

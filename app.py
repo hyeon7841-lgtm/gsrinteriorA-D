@@ -4,7 +4,7 @@ import pandas as pd
 import altair as alt
 from datetime import datetime, date
 
-st.set_page_config(page_title="집기입고 현황", layout="wide")
+st.set_page_config(page_title="집기입고 관리", layout="wide")
 
 DB = "data.db"
 
@@ -14,9 +14,9 @@ def get_conn():
 conn = get_conn()
 c = conn.cursor()
 
-# ===============================
-# 테이블 생성
-# ===============================
+# ==============================
+# 테이블
+# ==============================
 c.execute("""
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,11 +33,37 @@ CREATE TABLE IF NOT EXISTS requests (
     상태 TEXT
 )
 """)
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS vendor_mapping (
+    부문 TEXT,
+    지역팀 TEXT,
+    영업팀 TEXT,
+    업체명 TEXT
+)
+""")
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS completed_archive (
+    id INTEGER,
+    부문 TEXT,
+    지역팀 TEXT,
+    영업팀 TEXT,
+    담당자명 TEXT,
+    연락처 TEXT,
+    점포명 TEXT,
+    요청집기목록 TEXT,
+    등록일 TEXT,
+    업체명 TEXT,
+    예정입고일 TEXT,
+    상태 TEXT
+)
+""")
 conn.commit()
 
-# ===============================
+# ==============================
 # 옵션
-# ===============================
+# ==============================
 부문목록 = [f"{i}부문" for i in range(1,7)]
 지역팀목록 = ["1지역","2지역","3지역","4지역","신선영업1","신선영업2"]
 영업팀목록 = [f"{i}팀" for i in range(1,10)]
@@ -58,26 +84,25 @@ menu = st.sidebar.radio(
     ["집기입고 문의", "입고문의 처리", "데이터 관리"]
 )
 
-# 다른 메뉴로 이동 시 세션 초기화
 if menu != "입고문의 처리":
     st.session_state.vendor = None
 if menu != "데이터 관리":
     st.session_state.admin = False
 
 # =====================================================
-# 1️⃣ 집기입고 문의 (방문자 공개 현황)
+# 1️⃣ 집기입고 문의 (공개 현황)
 # =====================================================
 if menu == "집기입고 문의":
-    st.header("📦 집기입고 문의 현황")
+    st.header("📦 집기입고 문의")
 
-    with st.form("req_form"):
+    with st.form("req"):
         col1,col2,col3 = st.columns(3)
         부문 = col1.selectbox("부문", 부문목록)
         지역팀 = col2.selectbox("지역팀", 지역팀목록)
         영업팀 = col3.selectbox("영업팀", 영업팀목록)
 
         담당자명 = st.text_input("담당자명")
-        연락처 = st.text_input("연락처 (- 없이 숫자만)")
+        연락처 = st.text_input("연락처 (- 없이)")
         점포명 = st.text_input("점포명 (점 제외)")
         요청집기목록 = st.text_area("요청집기목록")
 
@@ -86,38 +111,39 @@ if menu == "집기입고 문의":
             if 점포명.endswith("점"):
                 점포명 = 점포명[:-1]
 
+            v = c.execute(
+                "SELECT 업체명 FROM vendor_mapping WHERE 부문=? AND 지역팀=? AND 영업팀=?",
+                (부문,지역팀,영업팀)
+            ).fetchone()
+            업체명 = v[0] if v else "미지정"
+
             c.execute("""
             INSERT INTO requests
             (부문,지역팀,영업팀,담당자명,연락처,점포명,
-             요청집기목록,등록일,상태)
-            VALUES (?,?,?,?,?,?,?,?, '접수')
+             요청집기목록,등록일,업체명,상태)
+            VALUES (?,?,?,?,?,?,?,?,?,'접수')
             """,(
-                부문,지역팀,영업팀,
-                담당자명,연락처,점포명,
-                요청집기목록,
-                datetime.now().strftime("%Y-%m-%d %H:%M")
+                부문,지역팀,영업팀,담당자명,연락처,
+                점포명,요청집기목록,
+                datetime.now().strftime("%Y-%m-%d %H:%M"),
+                업체명
             ))
             conn.commit()
-            st.success("문의가 접수되었습니다.")
             st.rerun()
 
-    st.divider()
-
-    # 🔍 검색
     search = st.text_input("🔍 점포명 검색")
-
     df = pd.read_sql("SELECT * FROM requests ORDER BY id DESC", conn)
     if search:
         df = df[df["점포명"].str.contains(search, case=False, na=False)]
 
     st.subheader("🔵 접수")
-    st.dataframe(df[df["상태"]=="접수"], hide_index=True, use_container_width=True)
+    st.dataframe(df[df["상태"]=="접수"], hide_index=True)
 
     st.subheader("🟡 처리현황")
-    st.dataframe(df[df["상태"]=="처리중"], hide_index=True, use_container_width=True)
+    st.dataframe(df[df["상태"]=="처리중"], hide_index=True)
 
     st.subheader("🟢 입고완료")
-    st.dataframe(df[df["상태"]=="완료"], hide_index=True, use_container_width=True)
+    st.dataframe(df[df["상태"]=="완료"], hide_index=True)
 
 # =====================================================
 # 2️⃣ 입고문의 처리 (업체)
@@ -135,33 +161,28 @@ if menu == "입고문의 처리":
             else:
                 st.error("로그인 실패")
     else:
-        st.success(f"로그인 업체 : {st.session_state.vendor}")
-
         df = pd.read_sql(
-            "SELECT * FROM requests WHERE 상태!='완료' ORDER BY id DESC",
-            conn
+            "SELECT * FROM requests WHERE 업체명=? AND 상태!='완료'",
+            conn, params=(st.session_state.vendor,)
         )
-
-        st.subheader("📋 처리 대상 문의")
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        st.dataframe(df, hide_index=True)
 
         if not df.empty:
-            선택ID = st.selectbox("처리할 문의 ID", df["id"])
+            선택ID = st.selectbox("문의 선택", df["id"])
             예정일 = st.date_input("입고예정일", date.today())
             완료 = st.checkbox("입고완료")
 
-            if st.button("처리 저장"):
+            if st.button("저장"):
                 상태 = "완료" if 완료 else "처리중"
                 c.execute(
                     "UPDATE requests SET 예정입고일=?, 상태=? WHERE id=?",
                     (예정일.strftime("%Y-%m-%d"), 상태, 선택ID)
                 )
                 conn.commit()
-                st.success("처리되었습니다.")
                 st.rerun()
 
 # =====================================================
-# 3️⃣ 데이터 관리
+# 3️⃣ 데이터 관리 (❗기능 유지)
 # =====================================================
 if menu == "데이터 관리":
     st.header("📊 데이터 관리")
@@ -169,37 +190,38 @@ if menu == "데이터 관리":
     if not st.session_state.admin:
         pw = st.text_input("관리자 비밀번호", type="password")
         if st.button("확인"):
-            if pw in ["시설", "tltjf"]:
+            if pw in ["시설","tltjf"]:
                 st.session_state.admin = True
                 st.rerun()
             else:
                 st.error("비밀번호 오류")
     else:
         df = pd.read_sql("SELECT * FROM requests", conn)
+        st.dataframe(df, hide_index=True)
 
-        st.subheader("📋 전체 데이터")
-        st.dataframe(df, hide_index=True, use_container_width=True)
+        st.download_button(
+            "CSV 다운로드",
+            df.to_csv(index=False).encode("utf-8-sig"),
+            "requests.csv"
+        )
 
-        if not df.empty:
-            st.subheader("📈 업체별 처리현황")
+        # 그래프
+        g = df.groupby("업체명").agg(
+            전체=("id","count"),
+            완료=("상태", lambda x:(x=="완료").sum())
+        ).reset_index()
+        g["처리율"] = (g["완료"]/g["전체"]*100).round(1)
 
-            g = df.groupby("업체명", dropna=False).agg(
-                전체=("id", "count"),
-                완료=("상태", lambda x: (x=="완료").sum())
-            ).reset_index()
-            g["처리율(%)"] = (g["완료"] / g["전체"] * 100).round(1)
+        bar = alt.Chart(g).mark_bar().encode(
+            x="업체명",
+            y="전체"
+        )
+        line = alt.Chart(g).mark_line(color="red", point=True).encode(
+            x="업체명",
+            y="처리율"
+        )
 
-            bar = alt.Chart(g).mark_bar().encode(
-                x="업체명",
-                y=alt.Y("전체", title="건수")
-            )
-
-            line = alt.Chart(g).mark_line(color="red", point=True).encode(
-                x="업체명",
-                y=alt.Y("처리율(%)", axis=alt.Axis(title="처리율(%)"))
-            )
-
-            st.altair_chart(
-                alt.layer(bar, line).resolve_scale(y="independent"),
-                use_container_width=True
-            )
+        st.altair_chart(
+            alt.layer(bar, line).resolve_scale(y="independent"),
+            use_container_width=True
+        )

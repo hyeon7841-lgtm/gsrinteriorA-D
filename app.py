@@ -227,10 +227,20 @@ if menu == "데이터 관리":
         reset_pw = st.text_input("초기화 비밀번호", type="password")
         if st.button("입고완료 전체 초기화"):
             if reset_pw == "이현호":
-                c.execute("""
-                UPDATE requests
-                SET 입고완료=0, 입고완료일=NULL, 예정입고일=NULL
-                """)
+                # ===== 입고완료 데이터 완전 삭제 =====
+st.subheader("⚠️ 입고완료 데이터 삭제")
+
+reset_pw = st.text_input("삭제 비밀번호", type="password")
+
+if st.button("입고완료 건 전체 삭제"):
+    if reset_pw == "이현호":
+        c.execute("DELETE FROM requests WHERE 입고완료 = 1")
+        conn.commit()
+        st.success("입고완료 데이터가 모두 삭제되었습니다.")
+        st.rerun()
+    else:
+        st.error("비밀번호가 올바르지 않습니다.")
+
                 conn.commit()
                 st.success("초기화 완료")
                 st.rerun()

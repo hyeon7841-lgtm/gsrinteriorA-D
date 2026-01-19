@@ -16,7 +16,7 @@ conn = get_conn()
 c = conn.cursor()
 
 # =====================================================
-# 테이블 생성 (requests는 유지)
+# 테이블
 # =====================================================
 c.execute("""
 CREATE TABLE IF NOT EXISTS requests (
@@ -36,29 +36,17 @@ CREATE TABLE IF NOT EXISTS requests (
 )
 """)
 
-# =====================================================
-# vendor_mapping 구조 검사 & 재생성 (핵심 수정)
-# =====================================================
 def ensure_vendor_mapping():
-    cols = []
-    try:
-        cols = [row[1] for row in c.execute("PRAGMA table_info(vendor_mapping)")]
-    except:
-        pass
-
-    required = ["부문", "지역팀", "영업팀", "업체명"]
-
-    if set(cols) != set(required):
-        c.execute("DROP TABLE IF EXISTS vendor_mapping")
-        c.execute("""
-        CREATE TABLE vendor_mapping (
-            부문 TEXT,
-            지역팀 TEXT,
-            영업팀 TEXT,
-            업체명 TEXT
-        )
-        """)
-        conn.commit()
+    c.execute("DROP TABLE IF EXISTS vendor_mapping")
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS vendor_mapping (
+        부문 TEXT,
+        지역팀 TEXT,
+        영업팀 TEXT,
+        업체명 TEXT
+    )
+    """)
+    conn.commit()
 
 ensure_vendor_mapping()
 
@@ -91,12 +79,8 @@ if "last_menu" not in st.session_state:
 # =====================================================
 # 사이드바
 # =====================================================
-menu = st.sidebar.radio(
-    "메뉴",
-    ["집기입고 문의", "입고문의 처리", "데이터 관리"]
-)
+menu = st.sidebar.radio("메뉴", ["집기입고 문의", "입고문의 처리", "데이터 관리"])
 
-# 데이터관리 → 다른 메뉴 이동 시 인증 해제
 if st.session_state.last_menu == "데이터 관리" and menu != "데이터 관리":
     st.session_state.admin_auth = False
 st.session_state.last_menu = menu
@@ -149,16 +133,9 @@ if menu == "집기입고 문의":
             st.rerun()
 
     st.divider()
-    st.subheader("📋 집기입고 문의 현황")
     df = pd.read_sql("SELECT * FROM requests", conn)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### ⏳ 처리중")
-        st.dataframe(df[df["입고완료"] == 0], use_container_width=True)
-    with col2:
-        st.markdown("### ✅ 입고완료")
-        st.dataframe(df[df["입고완료"] == 1], use_container_width=True)
+    df_view = df.drop(columns=["연락처"], errors="ignore")
+    st.dataframe(df_view, use_container_width=True, hide_index=True)
 
 # =====================================================
 # 2️⃣ 입고문의 처리
@@ -169,7 +146,6 @@ if menu == "입고문의 처리":
     if st.session_state.vendor is None:
         vid = st.text_input("업체 ID")
         vpw = st.text_input("비밀번호", type="password")
-
         if st.button("로그인"):
             for k, v in VENDOR_USERS.items():
                 if k.lower() == vid.strip().lower() and v == vpw:
@@ -177,19 +153,16 @@ if menu == "입고문의 처리":
                     st.rerun()
             st.error("로그인 실패")
     else:
-        st.success(f"로그인 업체: {st.session_state.vendor}")
-
         df = pd.read_sql(
             "SELECT * FROM requests WHERE 업체명=? ORDER BY id DESC",
             conn,
             params=(st.session_state.vendor,)
         )
-
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df.drop(columns=["연락처"], errors="ignore"), hide_index=True)
 
         미처리 = df[df["입고완료"] == 0]
-        if len(미처리) > 0:
-            선택ID = st.selectbox("처리할 문의 선택 (ID)", 미처리["id"].tolist())
+        if not 미처리.empty:
+            선택ID = st.selectbox("처리할 문의 ID", 미처리["id"])
             예정일 = st.date_input("예정입고일", date.today())
             완료 = st.checkbox("입고완료")
 
@@ -221,23 +194,54 @@ if menu == "데이터 관리":
     else:
         df = pd.read_sql("SELECT * FROM requests", conn)
 
-        csv = df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "CSV 다운로드",
-            csv,
-            "집기입고_원시데이터.csv",
-            "text/csv"
+        # ---------- 분석 ----------
+        st.subheader("📈 처리현황 분석")
+        기준 = st.radio("분석 기준", ["업체명", "부문", "지역팀"], horizontal=True)
+
+        summary = df.groupby(기준).agg(
+            전체건수=("id", "count"),
+            완료건수=("입고완료", "sum")
         )
+        summary["처리율(%)"] = (summary["완료건수"] / summary["전체건수"] * 100).round(1)
+        st.dataframe(summary, use_container_width=True)
+        st.bar_chart(summary["처리율(%)"])
 
-        map_df = pd.read_sql("SELECT * FROM vendor_mapping", conn)
-        edited = st.data_editor(map_df, num_rows="dynamic", use_container_width=True)
+        # ---------- 업체 매칭 ----------
+        st.divider()
+        st.subheader("🏭 업체 매칭 관리")
 
-        if st.button("매칭 저장"):
-            c.execute("DELETE FROM vendor_mapping")
-            for _, r in edited.iterrows():
+        with st.form("mapping_form"):
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                m부문 = st.selectbox("부문", 부문_리스트)
+            with col2:
+                m지역 = st.selectbox("지역팀", 지역팀_리스트)
+            with col3:
+                m영업 = st.selectbox("영업팀", 영업팀_리스트)
+            with col4:
+                m업체 = st.text_input("업체명")
+
+            if st.form_submit_button("매칭 추가/수정"):
+                c.execute("""
+                DELETE FROM vendor_mapping
+                WHERE 부문=? AND 지역팀=? AND 영업팀=?
+                """, (m부문, m지역, m영업))
                 c.execute(
                     "INSERT INTO vendor_mapping VALUES (?, ?, ?, ?)",
-                    (r["부문"], r["지역팀"], r["영업팀"], r["업체명"])
+                    (m부문, m지역, m영업, m업체)
                 )
-            conn.commit()
-            st.success("저장 완료")
+                conn.commit()
+
+                # 🔄 기존 문의 업체명 동기화
+                c.execute("""
+                UPDATE requests
+                SET 업체명=?
+                WHERE 부문=? AND 지역팀=? AND 영업팀=?
+                """, (m업체, m부문, m지역, m영업))
+                conn.commit()
+
+                st.success("매칭 및 기존 문의 연동 완료")
+                st.rerun()
+
+        map_df = pd.read_sql("SELECT * FROM vendor_mapping", conn)
+        st.dataframe(map_df, hide_index=True)

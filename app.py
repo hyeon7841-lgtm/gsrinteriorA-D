@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 import altair as alt
 from datetime import datetime, date
+import io
 
 st.set_page_config(layout="wide", page_title="집기입고 현황")
 
@@ -64,7 +65,7 @@ if "admin" not in st.session_state:
 # =========================
 menu = st.sidebar.radio("메뉴", ["집기입고 문의", "입고문의 처리", "데이터 관리"])
 
-# 입고문의 처리 페이지 벗어나면 업체 로그아웃
+# 업체 페이지 벗어나면 로그아웃
 if menu != "입고문의 처리":
     st.session_state.vendor = None
 
@@ -136,7 +137,7 @@ if menu == "집기입고 문의":
     st.dataframe(df[df["입고완료"] == 1], hide_index=True)
 
 # =====================================================
-# 2. 입고문의 처리 (업체)
+# 2. 입고문의 처리
 # =====================================================
 if menu == "입고문의 처리":
     st.header("🏭 입고문의 처리")
@@ -210,30 +211,39 @@ if menu == "데이터 관리":
             "처리율": [rate, rate, rate]
         })
 
-        bar = alt.Chart(chart_df).mark_bar().encode(
-            x="구분",
-            y="건수"
-        )
-
-        line = alt.Chart(chart_df).mark_line(color="red").encode(
-            x="구분",
-            y="처리율"
-        )
+        bar = alt.Chart(chart_df).mark_bar().encode(x="구분", y="건수")
+        line = alt.Chart(chart_df).mark_line(color="red").encode(x="구분", y="처리율")
 
         st.altair_chart(bar + line, use_container_width=True)
 
-        # ===== 입고완료 데이터 완전 삭제 =====
-        st.subheader("⚠️ 입고완료 데이터 삭제 (되돌릴 수 없음)")
+        # ===== 완료건 CSV 백업 + 삭제 =====
+        st.subheader("⚠️ 입고완료 데이터 백업 후 삭제")
+
         del_pw = st.text_input("삭제 비밀번호", type="password")
 
-        if st.button("입고완료 건 전체 삭제"):
-            if del_pw == "이현호":
-                c.execute("DELETE FROM requests WHERE 입고완료 = 1")
-                conn.commit()
-                st.success("입고완료 데이터가 모두 삭제되었습니다.")
-                st.rerun()
-            else:
-                st.error("비밀번호가 올바르지 않습니다.")
+        완료_df = df[df["입고완료"] == 1]
+
+        if not 완료_df.empty:
+            csv_buffer = io.StringIO()
+            완료_df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
+
+            st.download_button(
+                "① 입고완료 CSV 백업 다운로드",
+                data=csv_buffer.getvalue(),
+                file_name=f"입고완료_백업_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+
+            if st.button("② 입고완료 데이터 삭제"):
+                if del_pw == "이현호":
+                    c.execute("DELETE FROM requests WHERE 입고완료 = 1")
+                    conn.commit()
+                    st.success("백업 후 입고완료 데이터가 삭제되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("삭제 비밀번호가 올바르지 않습니다.")
+        else:
+            st.info("삭제할 입고완료 데이터가 없습니다.")
 
         # ===== 업체 매칭 =====
         st.subheader("🏭 업체 매칭 관리")
